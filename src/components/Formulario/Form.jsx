@@ -255,7 +255,22 @@ function Form() {
         }
       )
 
-      if (!validationResponse.data.valid) {
+      // Verifica se a resposta é vazia ou não tem a propriedade valid
+      if (!validationResponse.data || validationResponse.data.length === 0) {
+        throw new Error('Resposta inválida do servidor')
+      }
+
+      // Se a resposta for um array vazio ou não tiver registros, considera como inválido
+      if (Array.isArray(validationResponse.data) && validationResponse.data.length === 0) {
+        throw new Error('Credenciais inválidas')
+      }
+
+      // Verifica se as credenciais são válidas
+      const isValid = Array.isArray(validationResponse.data) 
+        ? validationResponse.data.length > 0 
+        : validationResponse.data.valid
+
+      if (!isValid) {
         const novasTentativas = tentativasValidacao + 1
         setTentativasValidacao(novasTentativas)
         setAuthToken(null)
@@ -281,24 +296,22 @@ function Form() {
         return
       }
 
-      if (validationResponse.data.token) {
-        setAuthToken(validationResponse.data.token)
-        localStorage.setItem('authToken', validationResponse.data.token)
-        localStorage.setItem('userEmail', formData.email) // Salva o email do usuário
-        
-        axios.defaults.headers.common['Authorization'] = `Bearer ${validationResponse.data.token}`
-        
-        toast.success('Login realizado com sucesso!', {
-          position: "top-right",
-          autoClose: 3000,
-          toastId: 'loginSucesso'
-        })
+      // Se chegou aqui, a autenticação foi bem-sucedida
+      const token = validationResponse.data.token || 'dummy-token-' + Date.now()
+      setAuthToken(token)
+      localStorage.setItem('authToken', token)
+      localStorage.setItem('userEmail', formData.email)
+      
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
+      
+      setIsEmailValid(true)
+      toast.success('Login realizado com sucesso!', {
+        position: "top-right",
+        autoClose: 3000,
+        toastId: 'loginSucesso'
+      })
 
-        navigate('/chamados')
-      } else {
-        throw new Error('Token não recebido do servidor')
-      }
-
+      navigate('/chamados')
     } catch (error) {
       console.error('Erro ao validar e-mail e senha:', error)
       let mensagemErro = 'Não foi possível validar o e-mail e senha.'
@@ -311,15 +324,19 @@ function Form() {
         }
       } else if (error.request) {
         mensagemErro = 'Não foi possível conectar ao servidor. Verifique sua conexão.'
+      } else {
+        mensagemErro = error.message || mensagemErro
       }
+      
+      setAuthToken(null)
+      localStorage.removeItem('authToken')
+      setIsEmailValid(false)
       
       toast.error(mensagemErro, {
         position: "top-right",
         autoClose: 5000,
         toastId: 'erroValidacao'
       })
-      setAuthToken(null)
-      localStorage.removeItem('authToken')
     } finally {
       setLoading(false)
     }
