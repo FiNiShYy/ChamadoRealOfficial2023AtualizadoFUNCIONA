@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { useEffect, useRef, useState } from 'react'
 import ReCAPTCHA from "react-google-recaptcha"
+import { useNavigate } from 'react-router-dom'
 import { ToastContainer, toast } from 'react-toastify'
 import 'react-toastify/dist/ReactToastify.css'
 import logoSalt from '../../assets/logo_salt.png'
@@ -8,7 +9,8 @@ import * as S from './style'
 
 function Form() {
   const [formData, setFormData] = useState({
-    email: '',
+    email: 'a@kitei.com.br',
+    password: '',
     descricao: '',
     projeto: '',
     autorizador: ''
@@ -30,6 +32,10 @@ function Form() {
     const saved = localStorage.getItem('emailBloqueado')
     return saved === 'true'
   })
+  const [senhaBloqueado, setSenhaBloqueado] = useState(() => {
+    const saved = localStorage.getItem('senhaBloqueado')
+    return saved === 'true'
+  })
   const [tempoRestante, setTempoRestante] = useState(() => {
     const saved = localStorage.getItem('bloqueioExpiraEm')
     if (!saved) return 0
@@ -39,25 +45,80 @@ function Form() {
     }
     return 0
   })
+  const [authToken, setAuthToken] = useState(() => {
+    const saved = localStorage.getItem('authToken')
+    return saved || null
+  })
 
   const timerRef = useRef(null)
+  const navigate = useNavigate()
 
   // Verifica se há um bloqueio ativo ao carregar o componente
   useEffect(() => {
+    const token = localStorage.getItem('authToken')
+    const currentPath = window.location.pathname
+
+    // Se estiver na rota de criar chamado e não tiver token, redireciona para login
+    if (currentPath === '/criar-chamado' && !token) {
+      toast.error('Você precisa fazer login para criar um chamado', {
+        position: "top-right",
+        autoClose: 5000
+      })
+      navigate('/')
+      return
+    }
+
+    // Se tiver token e estiver na rota inicial, redireciona para lista de chamados
+    if (token && currentPath === '/') {
+      navigate('/chamados')
+      return
+    }
+
     const bloqueioExpiraEm = localStorage.getItem('bloqueioExpiraEm')
     if (bloqueioExpiraEm) {
       const tempoRestante = Math.max(0, Math.floor((parseInt(bloqueioExpiraEm) - Date.now()) / 1000))
       if (tempoRestante > 0) {
         setEmailBloqueado(true)
+        setSenhaBloqueado(true)
         iniciarTemporizador(tempoRestante)
       } else {
         // Limpa o bloqueio expirado
         localStorage.removeItem('emailBloqueado')
+        localStorage.removeItem('senhaBloqueado')
         localStorage.removeItem('tentativasValidacao')
         localStorage.removeItem('bloqueioExpiraEm')
         setEmailBloqueado(false)
+        setSenhaBloqueado(false)
         setTentativasValidacao(0)
         setTempoRestante(0)
+      }
+    }
+  }, [navigate])
+
+  // Função para configurar o token nas requisições
+  useEffect(() => {
+    const token = localStorage.getItem('authToken')
+    if (token) {
+      setAuthToken(token)
+      setIsEmailValid(true) // Marca o email como válido se tiver token
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
+    } else {
+      delete axios.defaults.headers.common['Authorization']
+      localStorage.removeItem('authToken')
+    }
+  }, [])
+
+  useEffect(() => {
+    // Se estiver na rota de criar chamado, preenche o email com o do usuário logado
+    const token = localStorage.getItem('authToken')
+    const currentPath = window.location.pathname
+    if (currentPath === '/criar-chamado' && token) {
+      const userEmail = localStorage.getItem('userEmail')
+      if (userEmail) {
+        setFormData(prev => ({
+          ...prev,
+          email: userEmail
+        }))
       }
     }
   }, [])
@@ -88,6 +149,7 @@ function Form() {
         if (novoTempo <= 0) {
           clearInterval(timerRef.current)
           setEmailBloqueado(false)
+          setSenhaBloqueado(false)
           setTentativasValidacao(0)
           localStorage.removeItem('emailBloqueado')
           localStorage.removeItem('tentativasValidacao')
@@ -125,18 +187,24 @@ function Form() {
   }
 
   const handleVoltar = () => {
-    setIsEmailValid(false)
-    setCliente('')
-    setProjects([])
-    setAutorizadores([])
-    setCustomAutorizador(false)
-    setSelectedAutorizador('')
-    setFormData(prevState => ({
-      ...prevState,
-      descricao: '',
-      projeto: '',
-      autorizador: ''
-    }))
+    // Se o usuário estiver autenticado, volta para a lista de chamados
+    if (authToken) {
+      navigate('/chamados')
+    } else {
+      // Se não estiver autenticado, limpa o formulário
+      setIsEmailValid(false)
+      setCliente('')
+      setProjects([])
+      setAutorizadores([])
+      setCustomAutorizador(false)
+      setSelectedAutorizador('')
+      setFormData(prevState => ({
+        ...prevState,
+        descricao: '',
+        projeto: '',
+        autorizador: ''
+      }))
+    }
   }
 
   const handleRecaptchaChange = (value) => {
@@ -179,106 +247,22 @@ function Form() {
 
     setLoading(true)
     try {
-      const autorizadoresResponse = await axios.get(
-        'https://integrador.in.saltsystems.com.br/webhook/kaua/getAutorizadores'
-      )
-
-      console.log('Resposta da API de autorizadores:', JSON.stringify(autorizadoresResponse.data, null, 2))
-
-      const dominio = formData.email.split('@')[1]
-      console.log('Domínio do email:', dominio)
-
-      if (!autorizadoresResponse.data?.[0]?.list) {
-        console.error('Lista de clientes não encontrada na resposta:', autorizadoresResponse.data)
-        toast.error('Erro ao carregar a lista de clientes.', {
-          position: "top-right",
-          autoClose: 5000,
-          toastId: 'erroLista'
-        })
-        setLoading(false)
-        return
-      }
-
-      const clienteData = autorizadoresResponse.data[0].list.find(item => {
-        if (!item?.host) return false
-        return item.host.toLowerCase() === dominio.toLowerCase()
-      })
-
-      console.log('Dados do cliente encontrados:', clienteData)
-
-      if (!clienteData) {
-        const novasTentativas = tentativasValidacao + 1
-        setTentativasValidacao(novasTentativas)
-        
-        if (novasTentativas >= 3) {
-          setEmailBloqueado(true)
-          iniciarTemporizador()
-          toast.error('Número máximo de tentativas excedido. Por favor, aguarde 5 minutos antes de tentar novamente.', {
-            position: "top-right",
-            autoClose: 5000,
-            toastId: `maxTentativas-${Date.now()}`
-          })
-        } else {
-          toast.error(`Domínio ${dominio} não autorizado. Tentativas restantes: ${3 - novasTentativas}`, {
-            position: "top-right",
-            autoClose: 5000,
-            toastId: `dominioNaoAutorizado-${Date.now()}`
-          })
-        }
-        setLoading(false)
-        return
-      }
-
-      const response = await axios.post(
+      const validationResponse = await axios.post(
         'https://integrador.in.saltsystems.com.br/webhook/kaua/validar-email-senha',
-        { email: formData.email,
-          senha: formData.senha
+        { 
+          email: formData.email,
+          senha: formData.password
         }
       )
 
-      console.log('Resposta da validação de email:', response.data)
-
-      if (response.data.valid) {
-        setIsEmailValid(true)
-        setCliente(clienteData.cliente)
-        setTentativasValidacao(0)
-        setEmailBloqueado(false)
-        
-        if (clienteData.autorizadores) {
-          setAutorizadores(clienteData.autorizadores.split(',').map(auth => auth.trim()))
-          console.log('Autorizadores:', clienteData.autorizadores)
-          console.log('Autorizadores:', clienteData.autorizadores.split(','))
-        } else {
-          setAutorizadores([])
-        }
-        
-        if (clienteData.projetos) {
-          const projetosDisponiveis = clienteData.projetos.split(',').map(projeto => ({
-            Nome: projeto.trim(),
-            nomeInterno: projeto.trim()
-          }))
-          console.log('Projetos disponíveis:', projetosDisponiveis)
-          setProjects(projetosDisponiveis)
-        } else {
-          setProjects([])
-          toast.warning('Este cliente não possui projetos configurados.', {
-            position: "top-right",
-            autoClose: 5000,
-            toastId: `semProjetos-${Date.now()}`
-          })
-        }
-        
-        toast.success('E-mail validado com sucesso!', {
-          position: "top-right",
-          autoClose: 3000,
-          toastId: `emailValidado-${Date.now()}`
-        })
-      } else {
+      if (!validationResponse.data.valid) {
         const novasTentativas = tentativasValidacao + 1
         setTentativasValidacao(novasTentativas)
+        setAuthToken(null)
         
         if (novasTentativas >= 3) {
           setEmailBloqueado(true)
+          setSenhaBloqueado(true)
           iniciarTemporizador()
           toast.error('Número máximo de tentativas excedido. Por favor, aguarde 5 minutos antes de tentar novamente.', {
             position: "top-right",
@@ -286,23 +270,56 @@ function Form() {
             toastId: `maxTentativas-${Date.now()}`
           })
         } else {
-          toast.error(`E-mail inválido. Tentativas restantes: ${3 - novasTentativas}`, {
+          toast.error(`E-mail ou senha inválidos. Tentativas restantes: ${3 - novasTentativas}`, {
             position: "top-right",
             autoClose: 5000,
             toastId: `emailInvalido-${Date.now()}`
           })
         }
         setIsEmailValid(false)
-        setProjects([])
-        setAutorizadores([])
+        setLoading(false)
+        return
       }
+
+      if (validationResponse.data.token) {
+        setAuthToken(validationResponse.data.token)
+        localStorage.setItem('authToken', validationResponse.data.token)
+        localStorage.setItem('userEmail', formData.email) // Salva o email do usuário
+        
+        axios.defaults.headers.common['Authorization'] = `Bearer ${validationResponse.data.token}`
+        
+        toast.success('Login realizado com sucesso!', {
+          position: "top-right",
+          autoClose: 3000,
+          toastId: 'loginSucesso'
+        })
+
+        navigate('/chamados')
+      } else {
+        throw new Error('Token não recebido do servidor')
+      }
+
     } catch (error) {
-      console.error('Erro ao validar e-mail:', error)
-      toast.error('Não foi possível validar o e-mail.', {
+      console.error('Erro ao validar e-mail e senha:', error)
+      let mensagemErro = 'Não foi possível validar o e-mail e senha.'
+      
+      if (error.response) {
+        if (error.response.status === 500) {
+          mensagemErro = 'Erro interno do servidor. Por favor, tente novamente mais tarde.'
+        } else if (error.response.data?.message) {
+          mensagemErro = error.response.data.message
+        }
+      } else if (error.request) {
+        mensagemErro = 'Não foi possível conectar ao servidor. Verifique sua conexão.'
+      }
+      
+      toast.error(mensagemErro, {
         position: "top-right",
         autoClose: 5000,
         toastId: 'erroValidacao'
       })
+      setAuthToken(null)
+      localStorage.removeItem('authToken')
     } finally {
       setLoading(false)
     }
@@ -330,7 +347,7 @@ function Form() {
     try {
       setLoading(true)
       await axios.post(
-        'https://integrador.in.saltsystems.com.br/webhook/kaua/abrir-chamado',
+        'https://integrador.in.saltsystems.com.br/webhook-test/kaua/abrir-chamado',
         {
           email: formData.email,
           cliente,
@@ -344,20 +361,42 @@ function Form() {
         position: "top-right",
         autoClose: 3000
       })
-      setFormData({
-        ...formData,
-        descricao: '',
-        projeto: '',
-        autorizador: ''
-      })
+      
+      // Redireciona para a lista de chamados após criar um novo chamado
+      navigate('/chamados')
     } catch (err) {
       console.error('Erro ao enviar chamado:', err)
-      toast.error('Erro ao criar o chamado. Por favor, tente novamente.', {
+      let mensagemErro = 'Erro ao criar o chamado. Por favor, tente novamente.'
+      
+      if (err.response) {
+        if (err.response.status === 500) {
+          mensagemErro = 'Erro interno do servidor ao criar o chamado. Por favor, tente novamente mais tarde.'
+        } else if (err.response.data?.message) {
+          mensagemErro = err.response.data.message
+        }
+      } else if (err.request) {
+        mensagemErro = 'Não foi possível conectar ao servidor. Verifique sua conexão.'
+      }
+      
+      toast.error(mensagemErro, {
         position: "top-right",
-        autoClose: 5000
+        autoClose: 5000,
+        toastId: 'erroChamado'
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Função para navegar para a lista de chamados
+  const handleVerChamados = () => {
+    if (authToken) {
+      navigate('/chamados')
+    } else {
+      toast.warning('Por favor, faça login primeiro para ver os chamados.', {
+        position: "top-right",
+        autoClose: 5000
+      })
     }
   }
 
@@ -391,17 +430,17 @@ function Form() {
               )}
             </S.FormGroup>
             <S.FormGroup>
-              <S.Label htmlFor="email">Senha do cliente</S.Label>
+              <S.Label htmlFor="password">Senha do cliente</S.Label>
               <S.Input
-                type="email"
-                id="email"
-                name="email"
-                value={formData.email}
+                type="password"
+                id="password"
+                name="password"
+                value={formData.password}
                 onChange={handleChange}
                 required
-                disabled={emailBloqueado}
+                disabled={senhaBloqueado}
               />
-              {emailBloqueado && (
+              {senhaBloqueado && (
                 <S.TempoRestante>
                   Tempo restante: {formatarTempo(tempoRestante)}
                 </S.TempoRestante>
@@ -500,6 +539,9 @@ function Form() {
                 <S.BackButton type="button" onClick={handleVoltar}>
                   Voltar
                 </S.BackButton>
+                <S.Button type="button" onClick={handleVerChamados}>
+                  Ver Chamados
+                </S.Button>
                 <S.Button type="submit" disabled={loading}>
                   {loading ? 'Enviando...' : 'Enviar Chamado'}
                 </S.Button>

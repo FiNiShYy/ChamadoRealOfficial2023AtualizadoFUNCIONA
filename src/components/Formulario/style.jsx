@@ -60,6 +60,10 @@ export const Input = styled.input`
     border-color: #007bff;
     box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
   }
+
+  &[type="password"] {
+    letter-spacing: 2px;
+  }
 `
 
 export const Select = styled.select`
@@ -131,7 +135,6 @@ export const AlertContainer = styled.div`
   display: flex;
   align-items: center;
   gap: 8px;
-
 `
 
 export const Alert = styled.div`
@@ -173,4 +176,3 @@ export const RecaptchaContainer = styled.div`
   justify-content: center;
   align-items: center;
 `
-
